@@ -54,7 +54,11 @@ def salvar_previsoes(ativo, data_alvo, detalhes):
     c.close()
 
 def atualizar_previsoes_passadas(progresso_cb=None):
-    from worker import get_ticker
+    """Confere previsões vencidas. Faz UM download por ativo (e não um por previsão),
+    para não estourar o limite de requisições do Yahoo no início de cada ciclo."""
+    from worker import get_ticker, _extract_close
+    import time
+    import pandas as pd
     import yfinance as yf
     from datetime import timedelta
 
@@ -62,33 +66,49 @@ def atualizar_previsoes_passadas(progresso_cb=None):
     hoje = datetime.now().strftime('%Y-%m-%d')
     rows = c.execute('''
         SELECT id, ativo, data_alvo, preco_previsto
-        FROM previsoes WHERE preco_real IS NULL AND data_alvo <= ?
+        FROM previsoes WHERE preco_real IS NULL AND data_alvo < ?
     ''', (hoje,)).fetchall()
 
+    por_ativo = {}
+    for idp, ativo, data_alvo, prev in rows:
+        por_ativo.setdefault(ativo, []).append((idp, data_alvo, prev))
+
     conferidas = falhas = 0
-    for i, (idp, ativo, data_alvo, prev) in enumerate(rows):
+    for i, (ativo, itens) in enumerate(por_ativo.items()):
         try:
-            dt = datetime.strptime(data_alvo, '%Y-%m-%d')
+            datas = [datetime.strptime(d, '%Y-%m-%d') for _, d, _ in itens]
             hist = yf.download(
                 get_ticker(ativo),
-                start=(dt - timedelta(days=5)).strftime('%Y-%m-%d'),
-                end=(dt + timedelta(days=2)).strftime('%Y-%m-%d'),
-                progress=False, timeout=10
+                start=(min(datas) - timedelta(days=7)).strftime('%Y-%m-%d'),
+                end=(max(datas) + timedelta(days=2)).strftime('%Y-%m-%d'),
+                progress=False, auto_adjust=True, multi_level_index=False, timeout=15
             )
-            if not hist.empty:
-                if hasattr(hist.columns, 'get_level_values'):
-                    hist.columns = hist.columns.get_level_values(0)
-                real = float(hist['Close'].iloc[-1])
-                erro = abs((real - prev) / real) * 100
-                c.execute('UPDATE previsoes SET preco_real=?, erro_absoluto=? WHERE id=?', (real, erro, idp))
-                c.commit()
-                conferidas += 1
+            close = _extract_close(hist)
+            if close.empty:
+                falhas += len(itens)
             else:
-                falhas += 1
+                idx = pd.to_datetime(close.index)
+                if idx.tz is not None:
+                    idx = idx.tz_localize(None)
+                close = pd.Series(close.values, index=idx.normalize())
+                for idp, data_alvo, prev in itens:
+                    dt = pd.Timestamp(data_alvo)
+                    ate = close[close.index <= dt]
+                    # usa o último fechamento até a data alvo (no máximo 5 dias antes)
+                    if ate.empty or (dt - ate.index[-1]).days > 5:
+                        falhas += 1
+                        continue
+                    real = float(ate.iloc[-1])
+                    erro = abs((real - prev) / real) * 100
+                    c.execute('UPDATE previsoes SET preco_real=?, erro_absoluto=? WHERE id=?',
+                              (real, erro, idp))
+                    conferidas += 1
+                c.commit()
         except Exception:
-            falhas += 1
-        if progresso_cb and i % 5 == 0:
-            progresso_cb(f'Conferindo previsões: {i+1}/{len(rows)}')
+            falhas += len(itens)
+        if progresso_cb:
+            progresso_cb(f'Conferindo previsões: {i+1}/{len(por_ativo)} ativos')
+        time.sleep(0.5)
     c.close()
     return conferidas, falhas, len(rows)
 
@@ -158,3 +178,19 @@ def get_asset_history(symbol):
          'previsto': r[3], 'real': r[4], 'erro': r[5]}
         for r in rows
     ]
+
+
+def limpar_previsoes(backup_path=None):
+    """Apaga TODAS as previsões antigas (memória de aprendizado). Opcionalmente faz backup antes."""
+    c = _conn()
+    if backup_path:
+        b = sqlite3.connect(backup_path)
+        c.backup(b)
+        b.close()
+    total = c.execute('SELECT COUNT(*) FROM previsoes').fetchone()[0]
+    c.execute('DELETE FROM previsoes')
+    c.execute("DELETE FROM sqlite_sequence WHERE name='previsoes'")
+    c.commit()
+    c.execute('VACUUM')
+    c.close()
+    return total
