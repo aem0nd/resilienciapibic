@@ -117,86 +117,123 @@ def calc_bb(s, p=20, d=2):
     except Exception:
         return 0.0, 0.0, 0.0
 
+def _log_falha(modelo, symbol, e):
+    print(f"⚠️ {modelo} falhou em {symbol}: {type(e).__name__}: {e}")
+
+def _datas_futuras(ultima_data, dias):
+    return pd.date_range(start=ultima_data + pd.Timedelta(days=1), periods=dias, freq='D')
+
+def _n_passos(ultima_data, dias, cripto):
+    """Quantos passos (pregões) o modelo precisa projetar para cobrir `dias` dias corridos."""
+    if cripto:
+        return dias
+    return max(int((_datas_futuras(ultima_data, dias).weekday < 5).sum()), 1)
+
+def _alinhar_calendario(passos, ultima_data, dias, cripto):
+    """Converte uma projeção em passos de pregão para uma série em dias corridos (len == dias)."""
+    passos = np.asarray(passos, dtype=float)
+    if cripto:
+        return passos[:dias]
+    cont = np.cumsum(_datas_futuras(ultima_data, dias).weekday < 5)
+    idx = np.clip(cont - 1, 0, len(passos) - 1)
+    return passos[idx]
+
 def prever(close, symbol, dias):
     try:
         close = close.dropna()
         if len(close) < 60: return None
         pa = float(close.iloc[-1])
         res = {}
+        cripto = symbol in CRIPTOS
 
-        # MELHORIA: weekly_seasonality=True para capturar padrões de dias da semana
+        idx = pd.to_datetime(close.index)
+        if idx.tz is not None:
+            idx = idx.tz_localize(None)
+        close = pd.Series(close.values, index=idx)
+        ultima_data = idx[-1]
+        n_passos = _n_passos(ultima_data, dias, cripto)
+
+        # PROPHET: ajustado em log(preço), sazonalidade semanal só para cripto,
+        # changepoint_range maior para enxergar viradas recentes de tendência.
         try:
             m = Prophet(daily_seasonality=False, yearly_seasonality=False,
-                        weekly_seasonality=True, changepoint_prior_scale=0.05)
-            m.fit(pd.DataFrame({'ds': close.index, 'y': close.values}))
+                        weekly_seasonality=cripto,
+                        changepoint_prior_scale=0.05, changepoint_range=0.9)
+            m.fit(pd.DataFrame({'ds': idx, 'y': np.log(close.values)}))
             fc = m.predict(m.make_future_dataframe(periods=dias))
-            b = fc['yhat'].iloc[-dias:].values
+            b = np.exp(fc['yhat'].iloc[-dias:].values)
             a = b + (pa - b[0])
             cr = float((a[-1] / pa - 1) * 100)
             if -50 < cr < 200:
                 res['Prophet'] = {'preco_final': float(a[-1]), 'crescimento': cr, 'serie': a}
-        except Exception: pass
+        except Exception as e:
+            _log_falha('Prophet', symbol, e)
 
-        # MELHORIA: Sazonalidade ativada (m=5 para ações/ETFs, m=7 para cripto)
+        # ARIMA: projeta em passos de pregão (m=5 ações/ETFs, m=7 cripto)
+        # e converte para dias corridos, alinhado com os demais modelos.
         try:
-            m_sazonal = 7 if symbol in CRIPTOS else 5
-            mo = pm.auto_arima(close.values, d=1, seasonal=True, m=m_sazonal, 
-                               stepwise=True, suppress_warnings=True, error_action="ignore", 
+            m_sazonal = 7 if cripto else 5
+            mo = pm.auto_arima(close.values, d=1, seasonal=True, m=m_sazonal,
+                               stepwise=True, suppress_warnings=True, error_action="ignore",
                                max_p=3, max_q=3, max_P=2, max_Q=2)
-            b = mo.predict(n_periods=dias)
+            b = _alinhar_calendario(mo.predict(n_periods=n_passos), ultima_data, dias, cripto)
             a = b + (pa - b[0])
             cr = float((a[-1] / pa - 1) * 100)
             if -50 < cr < 200:
                 res['ARIMA'] = {'preco_final': float(a[-1]), 'crescimento': cr, 'serie': a}
-        except Exception: pass
+        except Exception as e:
+            _log_falha('ARIMA', symbol, e)
 
-        # MELHORIA: XGBoost com features técnicas (RSI e Volatilidade) + Lags
+        # XGBoost: features técnicas (RSI e volatilidade) + lags.
+        # Ordem das colunas em X: [rsi, vol, lag_1, lag_2, lag_3, lag_4, lag_5]
         try:
             dfx = pd.DataFrame(index=close.index)
             dfx['y'] = np.log(close / close.shift(1))
-            
-            # Features Técnicas
+
             delta = close.diff()
             gain = delta.clip(lower=0).rolling(14).mean()
             loss = (-delta.clip(upper=0)).rolling(14).mean()
             rs = gain / loss
             dfx['rsi'] = 100 - (100 / (1 + rs))
             dfx['vol'] = close.pct_change().rolling(14).std()
-            
-            # Lags
-            for i in range(1, 6): 
+
+            for i in range(1, 6):
                 dfx[f'lag_{i}'] = dfx['y'].shift(i)
-                
-            dfx.dropna(inplace=True)
+
+            dfx = dfx.replace([np.inf, -np.inf], np.nan).dropna()
             X, y = dfx.drop('y', axis=1).values, dfx['y'].values
-            
+
             mx = xgb.XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.05, random_state=42)
             mx.fit(X, y)
-            
-            last = X[-1].reshape(1, -1); preds = []
-            for _ in range(dias):
-                # Precisamos atualizar as features no loop, mas para simplificar, 
-                # mantemos as features técnicas estáveis e atualizamos só o lag do preço
-                p = mx.predict(last)[0]
+
+            # Última linha de features já inclui o retorno mais recente como lag_1 do próximo passo
+            last = X[-1].reshape(1, -1).copy()
+            last[0, 2:7] = np.r_[dfx['y'].values[-1], X[-1, 2:6]]
+            preds = []
+            for _ in range(n_passos):
+                p = float(mx.predict(last)[0])
                 preds.append(p)
-                last = np.roll(last, 1)
-                last[0, 5] = p # Atualiza o lag_1 (índice 5 considerando rsi, vol e 5 lags)
-                
-            b = pa * np.exp(np.cumsum(preds))
+                # RSI e vol ficam fixos; só desliza a janela de lags (lag_1 = p, lag_k = lag_{k-1})
+                last[0, 2:7] = np.r_[p, last[0, 2:6]]
+
+            b = _alinhar_calendario(pa * np.exp(np.cumsum(preds)), ultima_data, dias, cripto)
             a = b + (pa - b[0])
             cr = float((a[-1] / pa - 1) * 100)
             if -50 < cr < 200:
                 res['XGBoost'] = {'preco_final': float(a[-1]), 'crescimento': cr, 'serie': a}
-        except Exception: pass
+        except Exception as e:
+            _log_falha('XGBoost', symbol, e)
 
+        # HOLT-WINTERS: também em passos de pregão -> dias corridos
         try:
             mo = ExponentialSmoothing(close.values, trend='add', damped_trend=True, seasonal=None).fit()
-            b = mo.forecast(dias)
+            b = _alinhar_calendario(mo.forecast(n_passos), ultima_data, dias, cripto)
             a = b + (pa - b[0])
             cr = float((a[-1] / pa - 1) * 100)
             if -50 < cr < 200:
                 res['Holt-Winters'] = {'preco_final': float(a[-1]), 'crescimento': cr, 'serie': a}
-        except Exception: pass
+        except Exception as e:
+            _log_falha('Holt-Winters', symbol, e)
 
         if not res: return None
 
@@ -208,7 +245,7 @@ def prever(close, symbol, dias):
         pm_ = pm_ / sp if sp > 0 else pa
         cresc = float((pm_ / pa - 1) * 100)
 
-        # MELHORIA: Cone de incerteza usa volatilidade dos últimos 30 dias
+        # Cone de incerteza usa volatilidade dos últimos 30 dias
         vol_recente = close.pct_change().tail(30).dropna().std()
         da = np.arange(1, dias + 1)
         ls = pa * np.exp(1.96 * vol_recente * np.sqrt(da))
@@ -219,7 +256,8 @@ def prever(close, symbol, dias):
             'metodos': list(res.keys()), 'detalhes': res,
             'limite_superior': ls, 'limite_inferior': li, 'pesos_usados': pesos
         }
-    except Exception:
+    except Exception as e:
+        _log_falha('prever', symbol, e)
         return None
 
 def processar(symbol):
