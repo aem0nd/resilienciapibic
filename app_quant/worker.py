@@ -117,8 +117,15 @@ def calc_bb(s, p=20, d=2):
     except Exception:
         return 0.0, 0.0, 0.0
 
+def _aviso(msg):
+    # Nunca levanta exceção (ex.: console sem suporte a emoji/acentos)
+    try:
+        print(f"[AVISO] {msg}", flush=True)
+    except Exception:
+        pass
+
 def _log_falha(modelo, symbol, e):
-    print(f"⚠️ {modelo} falhou em {symbol}: {type(e).__name__}: {e}")
+    _aviso(f"{modelo} falhou em {symbol}: {type(e).__name__}: {e}")
 
 def _datas_futuras(ultima_data, dias):
     return pd.date_range(start=ultima_data + pd.Timedelta(days=1), periods=dias, freq='D')
@@ -260,25 +267,54 @@ def prever(close, symbol, dias):
         _log_falha('prever', symbol, e)
         return None
 
+# Ativos descartados de propósito (dado ruim); não adianta tentar de novo no mesmo ciclo
+_DESCARTADOS = set()
+
+def _limpar_outliers(ps, cripto):
+    """Remove pontos de preço claramente errados (spikes) comparando cada preço
+    com a mediana móvel centrada de 11 pregões. Retorna (série limpa, qtd removida)."""
+    limite = 0.5 if cripto else 0.3
+    med = ps.rolling(11, center=True, min_periods=3).median()
+    ok = ((ps / med) - 1).abs() <= limite
+    return ps[ok], int((~ok).sum())
+
 def processar(symbol):
     try:
         ticker = get_ticker(symbol)
         data = None
-        for _ in range(3):
+        for espera in (0, 3, 8, 20):
+            if espera:
+                time.sleep(espera)
             try:
                 data = yf.download(ticker, period="2y", interval="1d", progress=False,
                                    auto_adjust=True, multi_level_index=False, timeout=10)
                 if data is not None and not data.empty: break
             except Exception: pass
-            time.sleep(2)
         ps = _extract_close(data)
         if ps is None or len(ps) < 100:
+            _aviso(f"{symbol}: sem dados suficientes do Yahoo ({0 if ps is None else len(ps)} pregoes)")
             return None, None
 
+        cripto = symbol in CRIPTOS
+        ps = ps[ps > 0]
+        ps, n_out = _limpar_outliers(ps, cripto)
+        if n_out:
+            _aviso(f"{symbol}: {n_out} preco(s) com spike removido(s) do historico")
+        if len(ps) < 100:
+            _aviso(f"{symbol}: menos de 100 pregoes validos apos limpeza")
+            return None, None
         pa = float(ps.iloc[-1])
         ret = ps.pct_change().dropna()
+        vol_check = _safe_float(ret.std() * np.sqrt(252) * 100)
+        limite_vol = 500 if cripto else 250
+        if vol_check > limite_vol:
+            _aviso(f"{symbol} descartado: dado suspeito (volatilidade anual {vol_check:.0f}%, maior variacao diaria {ret.abs().max()*100:.0f}%)")
+            _DESCARTADOS.add(symbol)
+            return None, None
         prev = prever(ps, symbol, HORIZONTE_DIAS)
-        if prev is None: return None, None
+        if prev is None:
+            _aviso(f"{symbol}: nenhum modelo gerou previsao valida")
+            return None, None
 
         data_alvo = (datetime.now() + timedelta(days=HORIZONTE_DIAS)).strftime('%Y-%m-%d')
         salvar_previsoes(symbol, data_alvo, prev['detalhes'])
@@ -290,7 +326,8 @@ def processar(symbol):
         volat = _safe_float(ret.std() * np.sqrt(252) * 100)
         macd, sig, hst = calc_macd(ps); bbs, bbm, bbi = calc_bb(ps)
         rsi_s = max(0, (100 - rsi) / 100) * 10
-        score = (prev['crescimento_medio'] * 0.3) + (sh * 15) + (so * 10) - (dd * 0.2) + rsi_s
+        sh_s = max(-5.0, min(5.0, sh)); so_s = max(-5.0, min(5.0, so))  # evita um ativo dominar o ranking
+        score = (prev['crescimento_medio'] * 0.3) + (sh_s * 15) + (so_s * 10) - (dd * 0.2) + rsi_s
 
         if symbol in CRIPTOS: tipo = 'Cripto'
         elif symbol in INTERNACIONAIS: tipo = 'Ação Internacional'
@@ -377,7 +414,8 @@ def ciclo_completo(stop_event):
     except Exception as e:
         print(f"⚠️ Erro no feedback: {e}")
 
-    resultados, charts = [], {}
+    resultados, charts, sem_resultado = [], {}, []
+    _DESCARTADOS.clear()
     for i, sym in enumerate(ATIVOS):
         if stop_event.is_set():
             set_status(message='Interrompido pelo usuário')
@@ -389,7 +427,29 @@ def ciclo_completo(stop_event):
             resultados.append(row)
             if chart:
                 charts[sym] = chart
-        time.sleep(0.3)
+        else:
+            sem_resultado.append(sym)
+        time.sleep(1.0)
+
+    # Segunda tentativa: ativos que falharam por limite/instabilidade do Yahoo
+    repetir = [s_ for s_ in sem_resultado if s_ not in _DESCARTADOS]
+    if repetir and not stop_event.is_set():
+        set_status(current_asset='', message=f'Aguardando 30s para repetir {len(repetir)} ativos que falharam...')
+        time.sleep(30)
+        for sym in repetir:
+            if stop_event.is_set():
+                break
+            set_status(current_asset=sym, message=f'Reprocessando {sym}')
+            row, chart = processar(sym)
+            if row:
+                resultados.append(row)
+                sem_resultado.remove(sym)
+                if chart:
+                    charts[sym] = chart
+            time.sleep(1.0)
+
+    if sem_resultado:
+        _aviso(f"{len(sem_resultado)} ativos sem resultado neste ciclo: {', '.join(sem_resultado)}")
 
     cache = {
         'run_at': datetime.now().isoformat(timespec='seconds'),
@@ -411,6 +471,7 @@ def ciclo_completo(stop_event):
 
 
 def rodar_worker(stop_event, run_now_event):
+    _aviso("worker iniciado - versao v5 (filtro de volatilidade > 500% ativo)")
     init_db()
     from config import RODAR_AO_INICIAR
     if RODAR_AO_INICIAR:
