@@ -1,0 +1,13 @@
+flask
+yfinance
+pandas
+numpy
+matplotlib
+seaborn
+tqdm
+openpyxl
+scikit-learn
+statsmodels
+prophet
+pmdarima
+xgboost

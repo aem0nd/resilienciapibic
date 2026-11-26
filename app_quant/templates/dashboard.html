@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Análise Quant · Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --bg:#0d1117;--surface:#161b22;--surface2:#21262d;--border:#30363d;
+  --text:#c9d1d9;--muted:#8b949e;--accent:#58a6ff;--green:#3fb950;
+  --red:#f85149;--yellow:#d29922;--purple:#a371f7;--cyan:#39d353;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;font-size:14px}
+a{color:var(--accent);text-decoration:none}
+
+header{background:var(--surface);border-bottom:1px solid var(--border);
+  padding:16px 24px;display:flex;align-items:center;gap:24px;
+  position:sticky;top:0;z-index:100;flex-wrap:wrap}
+.logo{font-size:18px;font-weight:700;display:flex;align-items:center;gap:10px}
+.logo .dot{width:10px;height:10px;border-radius:50%;background:var(--green);
+  box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.status-group{display:flex;gap:16px;margin-left:auto;align-items:center;flex-wrap:wrap}
+.status-badge{display:flex;align-items:center;gap:8px;font-size:13px;
+  background:var(--surface2);padding:6px 12px;border-radius:6px;border:1px solid var(--border)}
+.status-badge .ind{width:8px;height:8px;border-radius:50%}
+.ind.running{background:var(--green);box-shadow:0 0 6px var(--green);animation:pulse 1.5s infinite}
+.ind.idle{background:var(--yellow)}
+.ind.stopped{background:var(--red)}
+
+nav.tabs{display:flex;gap:4px;background:var(--surface);padding:0 24px;
+  border-bottom:1px solid var(--border);overflow-x:auto}
+nav.tabs button{background:transparent;border:none;color:var(--muted);
+  padding:14px 20px;cursor:pointer;font-size:14px;font-weight:500;
+  border-bottom:2px solid transparent;transition:.15s;white-space:nowrap}
+nav.tabs button:hover{color:var(--text);background:var(--surface2)}
+nav.tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+main{padding:24px;max-width:1600px;margin:0 auto}
+.tab-content{display:none;animation:fade .2s}
+.tab-content.active{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
+
+.grid{display:grid;gap:16px;margin-bottom:24px}
+.grid.kpi{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+.card{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:20px;transition:.15s}
+.card:hover{border-color:#484f58}
+.kpi .label{color:var(--muted);font-size:12px;text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:8px}
+.kpi .value{font-size:28px;font-weight:700;font-variant-numeric:tabular-nums}
+.kpi .sub{font-size:12px;color:var(--muted);margin-top:4px}
+.value.pos{color:var(--green)}.value.neg{color:var(--red)}
+.value.neutral{color:var(--accent)}
+
+.chart-card{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;padding:20px;margin-bottom:24px}
+.chart-card h3{font-size:15px;margin-bottom:16px;color:var(--text);
+  display:flex;align-items:center;gap:8px}
+.chart-wrap{position:relative;height:380px}
+
+.progress-bar{height:6px;background:var(--surface2);border-radius:3px;
+  overflow:hidden;margin-top:8px}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--cyan));
+  width:0%;transition:width .4s;border-radius:3px}
+
+.table-wrap{background:var(--surface);border:1px solid var(--border);
+  border-radius:10px;overflow:hidden;margin-bottom:24px}
+.table-header{padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.table-header input,.table-header select{background:var(--surface2);
+  border:1px solid var(--border);color:var(--text);padding:8px 12px;
+  border-radius:6px;font-size:13px;outline:none}
+.table-header input:focus,.table-header select:focus{border-color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead{background:var(--surface2);position:sticky;top:0}
+th{padding:10px 12px;text-align:left;font-weight:600;color:var(--muted);
+  text-transform:uppercase;font-size:11px;letter-spacing:.5px;
+  border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
+th:hover{color:var(--text)}
+th.sorted-asc::after{content:' ▲';color:var(--accent)}
+th.sorted-desc::after{content:' ▼';color:var(--accent)}
+td{padding:10px 12px;border-bottom:1px solid var(--border);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+tbody tr{cursor:pointer;transition:background .1s}
+tbody tr:hover{background:var(--surface2)}
+.badge-tipo{display:inline-block;padding:2px 8px;border-radius:4px;
+  font-size:11px;font-weight:600;background:var(--surface2)}
+.tipo-Ação{background:#1f6feb;color:#fff}
+.tipo-FII{background:#238636;color:#fff}
+.tipo-ETF{background:#9e6a03;color:#fff}
+.tipo-Cripto{background:#8957e5;color:#fff}
+.tipo-Ação-Internacional{background:#a371f7;color:#fff}
+.rank-cell{font-weight:700;color:var(--muted)}
+.score-cell{font-weight:700;font-variant-numeric:tabular-nums}
+.score-high{color:var(--green)}
+.score-mid{color:var(--yellow)}
+.score-low{color:var(--red)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+
+button.btn{background:var(--surface2);border:1px solid var(--border);
+  color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer;
+  font-size:13px;font-weight:500;transition:.15s;display:inline-flex;
+  align-items:center;gap:6px}
+button.btn:hover{background:#2d333b;border-color:#484f58}
+button.btn.primary{background:var(--accent);color:#0d1117;border-color:var(--accent)}
+button.btn.primary:hover{background:#79b8ff}
+button.btn.danger{background:var(--red);color:#fff;border-color:var(--red)}
+button.btn.danger:hover{background:#ff7b72}
+button.btn:disabled{opacity:.5;cursor:not-allowed}
+
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);
+  z-index:1000;align-items:center;justify-content:center;padding:24px;overflow-y:auto}
+.modal-bg.show{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);
+  border-radius:12px;max-width:1100px;width:100%;max-height:90vh;overflow-y:auto}
+.modal-head{display:flex;justify-content:space-between;align-items:center;
+  padding:20px 24px;border-bottom:1px solid var(--border);position:sticky;top:0;
+  background:var(--surface);z-index:1}
+.modal-head h2{font-size:18px}
+.modal-close{background:none;border:none;color:var(--muted);font-size:24px;
+  cursor:pointer;line-height:1;padding:4px 8px}
+.modal-close:hover{color:var(--text)}
+.modal-body{padding:24px}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+  gap:12px;margin-bottom:20px}
+.info-item{background:var(--surface2);padding:12px;border-radius:8px}
+.info-item .lbl{font-size:11px;color:var(--muted);text-transform:uppercase}
+.info-item .val{font-size:16px;font-weight:600;margin-top:2px}
+
+.model-legend{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;font-size:13px}
+.model-legend span{display:flex;align-items:center;gap:6px}
+.model-legend .sw{width:12px;height:12px;border-radius:3px}
+
+.loader{display:inline-block;width:16px;height:16px;border:2px solid var(--surface2);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
+.empty-state h3{font-size:18px;margin-bottom:8px;color:var(--text)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span class="dot"></span>Análise Quant</div>
+  <div class="status-group">
+    <div class="status-badge"><span class="ind stopped" id="workerInd"></span>
+      <span id="workerLabel">Carregando...</span></div>
+    <div class="status-badge">📊 <span id="runAt">—</span></div>
+    <button class="btn primary" id="btnRunNow">▶ Rodar agora</button>
+    <button class="btn danger" id="btnStop">⏹ Parar tudo</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="active" data-tab="overview">Visão Geral</button>
+  <button data-tab="ranking">Ranking</button>
+  <button data-tab="table">Tabela Completa</button>
+  <button data-tab="learning">Aprendizado</button>
+</nav>
+
+<main>
+
+<div class="tab-content active" id="tab-overview">
+  <div class="grid kpi">
+    <div class="card kpi"><div class="label">Ativos Analisados</div>
+      <div class="value neutral" id="kpiTotal">—</div>
+      <div class="sub" id="kpiHorizonte">—</div></div>
+    <div class="card kpi"><div class="label">Melhor Oportunidade</div>
+      <div class="value pos" id="kpiBest">—</div>
+      <div class="sub" id="kpiBestSub">—</div></div>
+    <div class="card kpi"><div class="label">Crescimento Médio</div>
+      <div class="value" id="kpiAvg">—</div>
+      <div class="sub">projetado no horizonte</div></div>
+    <div class="card kpi"><div class="label">Aprendizado</div>
+      <div class="value neutral" id="kpiLearn">—</div>
+      <div class="sub" id="kpiLearnSub">—</div></div>
+  </div>
+
+  <div class="chart-card">
+    <h3>📈 Risco × Retorno Projetado</h3>
+    <div class="chart-wrap"><canvas id="chartRiskReturn"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h3>🏆 Top 10 Oportunidades (Score)</h3>
+    <div class="chart-wrap"><canvas id="chartTop10"></canvas></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-ranking">
+  <div class="card">
+    <h3 style="margin-bottom:16px">🏆 Ranking Completo</h3>
+    <div id="rankingContainer"><div class="empty-state">
+      <div class="loader"></div><p>Carregando...</p></div></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-table">
+  <div class="table-wrap">
+    <div class="table-header">
+      <input type="text" id="searchInput" placeholder="🔍 Buscar ativo..." style="min-width:220px">
+      <select id="filterTipo">
+        <option value="">Todos os tipos</option>
+        <option>Ação</option><option>FII</option><option>ETF</option>
+        <option>Cripto</option><option>Ação Internacional</option>
+      </select>
+      <span style="margin-left:auto;color:var(--muted);font-size:13px" id="tableCount"></span>
+    </div>
+    <div style="overflow-x:auto"><table id="mainTable">
+      <thead><tr id="tableHead"></tr></thead>
+      <tbody id="tableBody"></tbody>
+    </table></div>
+  </div>
+</div>
+
+<div class="tab-content" id="tab-learning">
+  <div class="grid kpi">
+    <div class="card kpi"><div class="label">Previsões Totais</div>
+      <div class="value neutral" id="learnTotal">—</div></div>
+    <div class="card kpi"><div class="label">Já Avaliadas</div>
+      <div class="value" id="learnEval">—</div>
+      <div class="sub" id="learnEvalSub">—</div></div>
+    <div class="card kpi"><div class="label">Status do Aprendizado</div>
+      <div class="value neutral" id="learnStatus">—</div>
+      <div class="sub">MAPE médio cai conforme calibra</div></div>
+  </div>
+
+  <div class="chart-card">
+    <h3>🎓 Evolução do MAPE por Modelo <span style="font-size:12px;color:var(--muted);font-weight:400">(menor = melhor)</span></h3>
+    <div class="model-legend" id="modelLegend"></div>
+    <div class="chart-wrap"><canvas id="chartMape"></canvas></div>
+  </div>
+
+  <div class="chart-card">
+    <h3>⚖️ Pesos Adaptativos Médios (evolução)</h3>
+    <div class="chart-wrap"><canvas id="chartWeights"></canvas></div>
+  </div>
+</div>
+
+</main>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="modalTitle">—</h2>
+      <button class="modal-close" id="modalClose">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="info-grid" id="modalInfo"></div>
+      <div class="chart-card" style="padding:0;border:none;margin-bottom:20px">
+        <div class="chart-wrap" style="height:340px"><canvas id="chartAsset"></canvas></div>
+      </div>
+      <div class="chart-card" style="padding:0;border:none">
+        <h3>📜 Histórico de Previsões</h3>
+        <div style="overflow-x:auto;max-height:280px"><table>
+          <thead><tr><th>Feita em</th><th>Alvo</th><th>Modelo</th>
+            <th>Previsto</th><th>Real</th><th>Erro %</th></tr></thead>
+          <tbody id="modalHistory"></tbody>
+        </table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = {
+  status:   () => fetch('/api/status').then(r => r.json()),
+  results:  () => fetch('/api/results').then(r => r.json()),
+  learning: () => fetch('/api/learning').then(r => r.json()),
+  asset:    s => fetch('/api/asset/' + s).then(r => r.json()),
+  runNow:   () => fetch('/api/worker/run-now', {method:'POST'}).then(r => r.json()),
+  stop:     () => fetch('/api/worker/stop',    {method:'POST'}).then(r => r.json()),
+};
+
+const CORES = {
+  'Prophet':        '#58a6ff',
+  'ARIMA':          '#d29922',
+  'XGBoost':        '#3fb950',
+  'Holt-Winters':   '#f85149',
+};
+
+const TIPO_COR = {
+  'Ação':'#58a6ff','FII':'#3fb950','ETF':'#d29922',
+  'Cripto':'#a371f7','Ação Internacional':'#a371f7',
+};
+
+const fmtNum = (v, d=2) => v == null ? '—' :
+  Number(v).toLocaleString('pt-BR', {minimumFractionDigits:d, maximumFractionDigits:d});
+const fmtPct = v => v == null ? '—' :
+  (v >= 0 ? '+' : '') + fmtNum(v, 2) + '%';
+
+let STATE = {
+  results: [], charts: {},
+  sortCol: '🎯 Score Oportunidade', sortDir: 'desc',
+  search: '', filterTipo: '',
+};
+
+async function atualizarStatus() {
+  try {
+    const s = await API.status();
+    const w = s.worker || {};
+    const ind = document.getElementById('workerInd');
+    const lbl = document.getElementById('workerLabel');
+    const btnRun = document.getElementById('btnRunNow');
+
+    if (w.running) {
+      ind.className = 'ind running';
+      lbl.textContent = w.message || 'Rodando...';
+      btnRun.disabled = true;
+      if (w.total > 0) lbl.textContent += ` (${w.progress}/${w.total})`;
+    } else {
+      ind.className = 'ind idle';
+      lbl.textContent = w.message || 'Aguardando';
+      btnRun.disabled = false;
+    }
+    document.getElementById('runAt').textContent =
+      s.cache.run_at ? new Date(s.cache.run_at).toLocaleString('pt-BR') : 'sem dados';
+  } catch (e) {
+    document.getElementById('workerLabel').textContent = 'Offline';
+    document.getElementById('workerInd').className = 'ind stopped';
+  }
+}
+
+let chartRiskReturn = null, chartTop10 = null;
+
+async function atualizarOverview() {
+  const data = await API.results();
+  STATE.results = data.results || [];
+  document.getElementById('kpiTotal').textContent = STATE.results.length;
+  document.getElementById('kpiHorizonte').textContent =
+    data.horizonte_dias ? `Horizonte: ${data.horizonte_dias} dias` : '—';
+
+  if (STATE.results.length === 0) return;
+
+  const best = STATE.results.reduce((a, b) =>
+    a['🎯 Score Oportunidade'] > b['🎯 Score Oportunidade'] ? a : b);
+  document.getElementById('kpiBest').textContent = best['Ativo'];
+  document.getElementById('kpiBestSub').textContent =
+    `${best['Tipo']} · ${fmtPct(best['Cresc. Médio (%)'])}`;
+
+  const avg = STATE.results.reduce((s, r) => s + (r['Cresc. Médio (%)'] || 0), 0) / STATE.results.length;
+  const avgEl = document.getElementById('kpiAvg');
+  avgEl.textContent = fmtPct(avg);
+  avgEl.className = 'value ' + (avg >= 0 ? 'pos' : 'neg');
+
+  const grupos = {};
+  STATE.results.forEach(r => {
+    if (r['Volatilidade Anual (%)'] > 0) {
+      (grupos[r['Tipo']] = grupos[r['Tipo']] || []).push(r);
+    }
+  });
+  const datasetsRR = Object.entries(grupos).map(([tipo, rows]) => ({
+    label: tipo,
+    data: rows.map(r => ({x: r['Volatilidade Anual (%)'], y: r['Cresc. Médio (%)'], _ativo: r['Ativo']})),
+    backgroundColor: TIPO_COR[tipo] || '#8b949e',
+    pointRadius: 6, pointHoverRadius: 8,
+  }));
+
+  if (chartRiskReturn) chartRiskReturn.destroy();
+  chartRiskReturn = new Chart(document.getElementById('chartRiskReturn'), {
+    type: 'scatter',
+    data: {datasets: datasetsRR},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      onClick: (e, els) => {
+        if (els.length) abrirAtivo(chartRiskReturn.data.datasets[els[0].datasetIndex].data[els[0].index]._ativo);
+      },
+      plugins: {
+        legend: {labels: {color: '#c9d1d9'}},
+        tooltip: {
+          callbacks: {
+            label: c => `${c.raw._ativo}: vol ${fmtNum(c.raw.x,1)}% · cresc ${fmtPct(c.raw.y)}`
+          }
+        }
+      },
+      scales: {
+        x: {title: {display:true, text:'Volatilidade Anual (%)', color:'#8b949e'},
+            grid: {color:'#21262d'}, ticks: {color:'#8b949e'}},
+        y: {title: {display:true, text:'Crescimento Projetado (%)', color:'#8b949e'},
+            grid: {color:'#21262d'}, ticks: {color:'#8b949e'}},
+      }
+    }
+  });
+
+  const top10 = [...STATE.results].sort((a, b) =>
+    b['🎯 Score Oportunidade'] - a['🎯 Score Oportunidade']).slice(0, 10);
+  if (chartTop10) chartTop10.destroy();
+  chartTop10 = new Chart(document.getElementById('chartTop10'), {
+    type: 'bar',
+    data: {
+      labels: top10.map(r => r['Ativo']),
+      datasets: [{
+        label: 'Score',
+        data: top10.map(r => r['🎯 Score Oportunidade']),
+        backgroundColor: top10.map(r => TIPO_COR[r['Tipo']] || '#58a6ff'),
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, indexAxis: 'y',
+      onClick: (e, els) => { if (els.length) abrirAtivo(top10[els[0].index]['Ativo']); },
+      plugins: {legend: {display: false}},
+      scales: {
+        x: {grid: {color:'#21262d'}, ticks: {color:'#8b949e'}},
+        y: {grid: {display:false}, ticks: {color:'#c9d1d9'}},
+      }
+    }
+  });
+}
+
+const COLUNAS = [
+  'Ativo','Tipo','Preço Atual (R$)','Previsão Média (R$)','Cresc. Médio (%)',
+  'Volatilidade Anual (%)','Sharpe Ratio','RSI (14d)','🎯 Score Oportunidade'
+];
+
+function renderTabela() {
+  let rows = [...STATE.results];
+
+  if (STATE.search) {
+    const q = STATE.search.toLowerCase();
+    rows = rows.filter(r => r['Ativo'].toLowerCase().includes(q));
+  }
+  if (STATE.filterTipo) {
+    rows = rows.filter(r => r['Tipo'] === STATE.filterTipo);
+  }
+  rows.sort((a, b) => {
+    const va = a[STATE.sortCol], vb = b[STATE.sortCol];
+    const cmp = typeof va === 'number' && typeof vb === 'number'
+      ? va - vb : String(va).localeCompare(String(vb));
+    return STATE.sortDir === 'desc' ? -cmp : cmp;
+  });
+
+  const rankContainer = document.getElementById('rankingContainer');
+  if (rows.length === 0) {
+    rankContainer.innerHTML = '<div class="empty-state"><h3>Sem dados</h3><p>Aguarde o primeiro ciclo ou rode agora.</p></div>';
+  } else {
+    const top = rows.slice(0, 20);
+    rankContainer.innerHTML = `<div style="overflow-x:auto"><table><thead><tr>
+      <th>#</th><th>Ativo</th><th>Tipo</th><th>Preço</th><th>Previsto</th>
+      <th>Cresc.</th><th>Score</th></tr></thead><tbody>
+      ${top.map((r, i) => `<tr onclick="abrirAtivo('${r['Ativo']}')">
+        <td class="rank-cell">${i+1}</td>
+        <td><strong>${r['Ativo']}</strong></td>
+        <td><span class="badge-tipo tipo-${r['Tipo'].replace(/ /g,'-')}">${r['Tipo']}</span></td>
+        <td>R$ ${fmtNum(r['Preço Atual (R$)'])}</td>
+        <td>R$ ${fmtNum(r['Previsão Média (R$)'])}</td>
+        <td class="${r['Cresc. Médio (%)']>=0?'pos':'neg'}">${fmtPct(r['Cresc. Médio (%)'])}</td>
+        <td class="score-cell ${r['🎯 Score Oportunidade']>15?'score-high':r['🎯 Score Oportunidade']>5?'score-mid':'score-low'}">
+          ${fmtNum(r['🎯 Score Oportunidade'])}</td>
+      </tr>`).join('')}
+      </tbody></table></div>`;
+  }
+
+  document.getElementById('tableHead').innerHTML = COLUNAS.map(c =>
+    `<th data-col="${c}" class="${c===STATE.sortCol?'sorted-'+STATE.sortDir:''}">${c}</th>`
+  ).join('');
+  document.querySelectorAll('#tableHead th').forEach(th => {
+    th.onclick = () => {
+      const c = th.dataset.col;
+      if (STATE.sortCol === c) STATE.sortDir = STATE.sortDir === 'desc' ? 'asc' : 'desc';
+      else { STATE.sortCol = c; STATE.sortDir = 'desc'; }
+      renderTabela();
+    };
+  });
+
+  document.getElementById('tableBody').innerHTML = rows.map(r => {
+    const cells = COLUNAS.map(c => {
+      const v = r[c];
+      if (c === 'Ativo') return `<td><strong>${v}</strong></td>`;
+      if (c === 'Tipo') return `<td><span class="badge-tipo tipo-${v.replace(/ /g,'-')}">${v}</span></td>`;
+      if (c === '🎯 Score Oportunidade') {
+        const cls = v > 15 ? 'score-high' : v > 5 ? 'score-mid' : 'score-low';
+        return `<td class="score-cell ${cls}">${fmtNum(v)}</td>`;
+      }
+      if (c.includes('%') && c.includes('Cresc')) {
+        return `<td class="${v>=0?'pos':'neg'}">${fmtPct(v)}</td>`;
+      }
+      return `<td>${typeof v === 'number' ? fmtNum(v) : v}</td>`;
+    }).join('');
+    return `<tr onclick="abrirAtivo('${r['Ativo']}')">${cells}</tr>`;
+  }).join('');
+
+  document.getElementById('tableCount').textContent = `${rows.length} ativos`;
+}
+
+let chartMape = null, chartWeights = null;
+
+async function atualizarLearning() {
+  const data = await API.learning();
+  document.getElementById('learnTotal').textContent = fmtNum(data.total_predictions, 0);
+  document.getElementById('learnEval').textContent = fmtNum(data.total_evaluated, 0);
+  document.getElementById('learnEvalSub').textContent =
+    `${fmtNum(data.evaluation_rate * 100, 1)}% do total`;
+
+  document.getElementById('kpiLearn').textContent = fmtNum(data.total_evaluated, 0);
+  document.getElementById('kpiLearnSub').textContent =
+    `de ${fmtNum(data.total_predictions, 0)} previsões`;
+
+  if (data.mape_by_date.length === 0) {
+    document.getElementById('learnStatus').textContent = 'Aguardando';
+    return;
+  }
+  document.getElementById('learnStatus').textContent =
+    data.evaluation_rate > 0 ? 'Calibrando' : 'Sem dados';
+
+  const labels = data.mape_by_date.map(d => d.date);
+  const modelos = ['Prophet','ARIMA','XGBoost','Holt-Winters'];
+
+  document.getElementById('modelLegend').innerHTML = modelos.map(m =>
+    `<span><span class="sw" style="background:${CORES[m]}"></span>${m}</span>`
+  ).join('');
+
+  if (chartMape) chartMape.destroy();
+  chartMape = new Chart(document.getElementById('chartMape'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: modelos.map(m => ({
+        label: m,
+        data: data.mape_by_date.map(d => d[m] ?? null),
+        borderColor: CORES[m], backgroundColor: CORES[m] + '20',
+        tension: .3, spanGaps: true, pointRadius: 3,
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display: false}},
+      scales: {
+        x: {grid: {color:'#21262d'}, ticks: {color:'#8b949e'}},
+        y: {grid: {color:'#21262d'}, ticks: {color:'#8b949e'},
+            title: {display:true, text:'MAPE (%)', color:'#8b949e'}},
+      }
+    }
+  });
+
+  const weightsByDate = data.mape_by_date.map(d => {
+    const inv = {}; let soma = 0;
+    modelos.forEach(m => {
+      const v = d[m];
+      inv[m] = (v && v > 0) ? 1 / v : 0;
+      soma += inv[m];
+    });
+    const w = {};
+    modelos.forEach(m => w[m] = soma > 0 ? inv[m] / soma : 0.25);
+    return w;
+  });
+
+  if (chartWeights) chartWeights.destroy();
+  chartWeights = new Chart(document.getElementById('chartWeights'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: modelos.map(m => ({
+        label: m,
+        data: weightsByDate.map(w => w[m] * 100),
+        borderColor: CORES[m], backgroundColor: CORES[m] + '33',
+        fill: true, tension: .3,
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {labels: {color: '#c9d1d9'}}},
+      scales: {
+        x: {grid: {color:'#21262d'}, ticks: {color:'#8b949e'}},
+        y: {grid: {color:'#21262d'}, ticks: {color:'#8b949e', callback: v => v + '%'},
+            stacked: true, max: 100},
+      }
+    }
+  });
+}
+
+let chartAsset = null;
+
+async function abrirAtivo(symbol) {
+  document.getElementById('modalBg').classList.add('show');
+  document.getElementById('modalTitle').textContent = symbol + ' — Carregando...';
+  document.getElementById('modalInfo').innerHTML = '';
+  document.getElementById('modalHistory').innerHTML = '';
+
+  const data = await API.asset(symbol);
+  document.getElementById('modalTitle').textContent = `${symbol} · ${data.summary?.['Tipo'] || ''}`;
+
+  if (data.summary) {
+    const s = data.summary;
+    const itens = [
+      ['Preço Atual', `R$ ${fmtNum(s['Preço Atual (R$)'])}`],
+      ['Previsão Média', `R$ ${fmtNum(s['Previsão Média (R$)'])}`],
+      ['Crescimento', fmtPct(s['Cresc. Médio (%)'])],
+      ['Score', fmtNum(s['🎯 Score Oportunidade'])],
+      ['Volatilidade', `${fmtNum(s['Volatilidade Anual (%)'])}%`],
+      ['Sharpe', fmtNum(s['Sharpe Ratio'], 3)],
+      ['RSI', fmtNum(s['RSI (14d)'], 1)],
+      ['VaR 95%', `${fmtNum(s['VaR 95% (1d %)'])}%`],
+    ];
+    document.getElementById('modalInfo').innerHTML = itens.map(([l, v]) =>
+      `<div class="info-item"><div class="lbl">${l}</div><div class="val">${v}</div></div>`
+    ).join('');
+  }
+
+  if (data.chart) {
+    const c = data.chart;
+    const allDates = [...c.hist_dates, ...c.proj_dates];
+    const nH = c.hist_dates.length;
+    const nP = c.proj_dates.length;
+    const padH = Array(nH).fill(null);
+    const padP = Array(nP).fill(null);
+    const datasets = [{
+      label: 'Histórico', data: [...c.hist_prices, ...padP],
+      borderColor: '#c9d1d9', backgroundColor: 'transparent',
+      tension: .2, pointRadius: 0, borderWidth: 2,
+    }];
+    Object.entries(c.projections).forEach(([m, arr]) => {
+      if (!CORES[m]) return;
+      datasets.push({
+        label: `${m} (${fmtNum((c.weights[m]||0)*100,0)}%)`,
+        data: [...padH, ...arr],
+        borderColor: CORES[m], borderDash: [5,4], borderWidth: 2,
+        pointRadius: 0, tension: .2,
+      });
+    });
+    datasets.push({
+      label: 'Cone 95% (sup)', data: [...padH, ...c.upper],
+      borderColor: '#484f58', borderDash: [2,3], pointRadius: 0, borderWidth: 1,
+    });
+    datasets.push({
+      label: 'Cone 95% (inf)', data: [...padH, ...c.lower],
+      borderColor: '#484f58', borderDash: [2,3], pointRadius: 0, borderWidth: 1,
+      fill: '-1', backgroundColor: 'rgba(139,148,158,0.08)',
+    });
+
+    if (chartAsset) chartAsset.destroy();
+    chartAsset = new Chart(document.getElementById('chartAsset'), {
+      type: 'line',
+      data: {labels: allDates, datasets},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: {mode: 'index', intersect: false},
+        plugins: {legend: {labels: {color: '#c9d1d9', boxWidth: 12}}},
+        scales: {
+          x: {grid: {color:'#21262d'}, ticks: {color:'#8b949e', maxTicksLimit: 12}},
+          y: {grid: {color:'#21262d'}, ticks: {color:'#8b949e'}},
+        }
+      }
+    });
+  }
+
+  if (data.history && data.history.length) {
+    document.getElementById('modalHistory').innerHTML = data.history.map(h =>
+      `<tr><td>${h.data_previsao}</td><td>${h.data_alvo}</td><td>${h.modelo}</td>
+       <td>R$ ${fmtNum(h.previsto)}</td>
+       <td>${h.real ? 'R$ ' + fmtNum(h.real) : '—'}</td>
+       <td class="${h.erro == null ? '' : h.erro < 2 ? 'pos' : h.erro > 5 ? 'neg' : ''}">
+         ${h.erro == null ? '—' : fmtNum(h.erro) + '%'}</td></tr>`
+    ).join('');
+  } else {
+    document.getElementById('modalHistory').innerHTML =
+      '<tr><td colspan="6" style="text-align:center;color:var(--muted)">Nenhum histórico ainda</td></tr>';
+  }
+}
+
+document.getElementById('modalClose').onclick = () => {
+  document.getElementById('modalBg').classList.remove('show');
+  if (chartAsset) { chartAsset.destroy(); chartAsset = null; }
+};
+document.getElementById('modalBg').onclick = e => {
+  if (e.target.id === 'modalBg') document.getElementById('modalClose').click();
+};
+
+document.querySelectorAll('nav.tabs button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+  };
+});
+
+document.getElementById('searchInput').oninput = e => {
+  STATE.search = e.target.value; renderTabela();
+};
+document.getElementById('filterTipo').onchange = e => {
+  STATE.filterTipo = e.target.value; renderTabela();
+};
+document.getElementById('btnRunNow').onclick = async () => {
+  await API.runNow();
+  document.getElementById('workerLabel').textContent = 'Solicitado...';
+};
+document.getElementById('btnStop').onclick = async () => {
+  if (!confirm('Parar tudo? O painel vai ficar offline.')) return;
+  await API.stop();
+  setTimeout(() => window.close(), 1000);
+};
+
+async function refreshAll() {
+  await atualizarStatus();
+  await atualizarOverview();
+  renderTabela();
+  await atualizarLearning();
+}
+
+refreshAll();
+setInterval(atualizarStatus, 3000);
+setInterval(atualizarOverview, 30000);
+setInterval(atualizarLearning, 60000);
+</script>
+</body>
+</html>
